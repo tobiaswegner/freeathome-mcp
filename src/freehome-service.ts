@@ -1,142 +1,224 @@
-import { FreeAtHome } from '@busch-jaeger/free-at-home';
+import { SystemAccessPoint, ClientConfiguration } from "freeathome-api";
+import { BroadcastMessage } from "freeathome-api/dist/lib/BroadcastMessage";
+import { Subscriber } from "freeathome-api/dist/lib/Subscriber";
 
-export class FreeAtHomeService {
-  private freeAtHome: FreeAtHome;
+export class FreeAtHomeService implements Subscriber {
+  private systemAccessPoint: SystemAccessPoint;
   private isConnected = false;
+  private readyResolve: (() => void) | null = null;
+  private readyReject: ((err: Error) => void) | null = null;
 
   constructor() {
-    const baseUrl = process.env.FREEHOME_BASE_URL || undefined;
-    this.freeAtHome = new FreeAtHome(baseUrl);
-    this.initializeConnection();
+    const hostname = process.env.FREEATHOME_HOSTNAME;
+    const username = process.env.FREEATHOME_USERNAME || "admin";
+    const password = process.env.FREEATHOME_PASSWORD || "";
+
+    if (!hostname) {
+      throw new Error("FREEATHOME_HOSTNAME environment variable is required");
+    }
+
+    const config = new ClientConfiguration(hostname, username, password);
+    this.systemAccessPoint = new SystemAccessPoint(config, this, null);
   }
 
-  private initializeConnection(): void {
-    this.freeAtHome.on('open', () => {
-      console.log('Connected to free@home system');
-      this.isConnected = true;
+  async connect(): Promise<void> {
+    const ready = new Promise<void>((resolve, reject) => {
+      this.readyResolve = resolve;
+      this.readyReject = reject;
     });
 
-    this.freeAtHome.on('close', (reason: string) => {
-      console.error('free@home connection closed:', reason);
-      this.isConnected = false;
-    });
+    try {
+      await this.systemAccessPoint.connect();
+    } catch (error) {
+      this.readyResolve = null;
+      this.readyReject = null;
+      throw new Error(
+        `Failed to connect to free@home system: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    // Wait for master data + subscription confirmation via broadcastMessage
+    await ready;
+    this.isConnected = true;
+    console.log("Connected to free@home system");
+  }
+
+  broadcastMessage(message: BroadcastMessage): void {
+    switch (message.type) {
+      case "update":
+        break;
+      case "error":
+        console.error("free@home error:", message.result);
+        if (this.readyReject) {
+          this.readyReject(
+            message.result instanceof Error
+              ? message.result
+              : new Error(String(message.result)),
+          );
+          this.readyResolve = null;
+          this.readyReject = null;
+        }
+        break;
+      case "subscribed":
+        if (message.result) {
+          console.log("Subscribed to free@home updates");
+          if (this.readyResolve) {
+            this.readyResolve();
+            this.readyResolve = null;
+            this.readyReject = null;
+          }
+        } else {
+          console.warn("free@home subscription lost (SysAP may be offline)");
+          this.isConnected = false;
+        }
+        break;
+    }
   }
 
   private ensureConnected(): void {
-    if (!this.freeAtHome || !this.isConnected) {
-      throw new Error('Not connected to free@home system. Please check connection settings.');
+    if (!this.isConnected) {
+      throw new Error(
+        "Not connected to free@home system. Please check connection settings.",
+      );
     }
-  }
-
-  private parseChannelId(channelId: string): number {
-    // Handle 'ch' prefix if present
-    if (channelId.startsWith('ch')) {
-      return parseInt(channelId.substring(2));
-    }
-    return parseInt(channelId);
   }
 
   async getDevices(): Promise<any> {
     this.ensureConnected();
-    
+
     try {
-      const deviceIterator = await this.freeAtHome.getAllDevices();
-      const devices = Array.from(deviceIterator);
-      return devices.map(device => ({
-        id: device.serialNumber,
-        name: device.displayName
-      }));
+      const data = this.systemAccessPoint.getDeviceData();
+      return Object.entries(data).map(([serialNo, device]: [string, any]) => {
+        const activeChannels: any = {};
+
+        if (device.channels) {
+          for (const [chId, channel] of Object.entries<any>(device.channels)) {
+            activeChannels[chId] = {
+              displayName: channel.displayName || null,
+              functionId: channel.functionId || null,
+              floor: channel.floor || null,
+              room: channel.room || null,
+            };
+          }
+        }
+
+        return {
+          id: serialNo,
+          name: device.typeName || serialNo,
+          activeChannels,
+        };
+      });
     } catch (error) {
-      throw new Error(`Failed to get devices: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Failed to get devices: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
   async getDeviceInfo(deviceId: string): Promise<any> {
     this.ensureConnected();
-    
+
     try {
-      const device = await this.freeAtHome.getDevice(deviceId);
+      const data = this.systemAccessPoint.getDeviceData();
+      const device = data[deviceId];
       if (!device) {
         throw new Error(`Device with ID ${deviceId} not found`);
       }
-      
+
+      const activeChannels: any = {};
+      if (device.channels) {
+        for (const [chId, channel] of Object.entries<any>(device.channels)) {
+          activeChannels[chId] = {
+            displayName: channel.displayName || null,
+            functionId: channel.functionId || null,
+            floor: channel.floor || null,
+            room: channel.room || null,
+          };
+        }
+      }
+
       return {
-        id: device.deviceId,
-        name: device.displayName
+        id: deviceId,
+        name: device.typeName || deviceId,
+        activeChannels,
       };
     } catch (error) {
-      throw new Error(`Failed to get device info: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Failed to get device info: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
-  async setDeviceState(deviceId: string, channelId: string, datapoint: string, value: string): Promise<boolean> {
+  async setDeviceState(
+    deviceId: string,
+    channelId: string,
+    datapoint: string,
+    value: string,
+  ): Promise<boolean> {
     this.ensureConnected();
-    
+
     try {
-      const channelNumber = this.parseChannelId(channelId);
-      
-      // Parse datapoint to determine type and extract numeric index
-      let datapointIndex: number;
-      let isInput: boolean;
-      
-      if (datapoint.startsWith('idp')) {
-        // Input datapoint - remove 'idp' prefix and parse as hex
-        datapointIndex = parseInt(datapoint.substring(3), 16);
-        isInput = true;
-      } else if (datapoint.startsWith('odp')) {
-        // Output datapoint - remove 'odp' prefix and parse as hex
-        datapointIndex = parseInt(datapoint.substring(3), 16);
-        isInput = false;
-      } else {
-        // Fallback: assume it's a plain number and treat as input
-        datapointIndex = parseInt(datapoint);
-        isInput = true;
-      }
-      
-      // Use appropriate method based on datapoint type
-      if (isInput) {
-        await this.freeAtHome.freeAtHomeApi.setInputDatapoint(deviceId, channelNumber, datapointIndex, value);
-      } else {
-        await this.freeAtHome.freeAtHomeApi.setOutputDatapoint(deviceId, channelNumber, datapointIndex, value);
-      }
-      
+      await this.systemAccessPoint.setDatapoint(
+        deviceId,
+        channelId,
+        datapoint,
+        value,
+      );
       return true;
     } catch (error) {
-      throw new Error(`Failed to set device state: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Failed to set device state: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
   async getDatapoints(deviceId: string, channelId: string): Promise<any> {
     this.ensureConnected();
-    
+
     try {
-      const device = await this.freeAtHome.getDevice(deviceId);
+      const data = this.systemAccessPoint.getDeviceData();
+      const device = data[deviceId];
       if (!device) {
         throw new Error(`Device with ID ${deviceId} not found`);
       }
-      
+
       const channel = device.channels?.[channelId];
       if (!channel) {
-        throw new Error(`Channel with ID ${channelId} not found on device ${deviceId}`);
+        throw new Error(
+          `Channel with ID ${channelId} not found on device ${deviceId}`,
+        );
       }
-      
-      return {
-        inputs: channel.inputs || {},
-        outputs: channel.outputs || {},
-      };
+
+      // Split datapoints into inputs (idp*) and outputs (odp*)
+      const inputs: Record<string, string> = {};
+      const outputs: Record<string, string> = {};
+
+      if (channel.datapoints) {
+        for (const [dpId, dpValue] of Object.entries<any>(channel.datapoints)) {
+          if (dpId.startsWith("idp")) {
+            inputs[dpId] = dpValue;
+          } else if (dpId.startsWith("odp")) {
+            outputs[dpId] = dpValue;
+          }
+        }
+      }
+
+      return { inputs, outputs };
     } catch (error) {
-      throw new Error(`Failed to get datapoints: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Failed to get datapoints: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
   async disconnect(): Promise<void> {
-    if (this.freeAtHome && this.isConnected) {
+    if (this.isConnected) {
       try {
-        this.freeAtHome.freeAtHomeApi.disconnect();
+        await this.systemAccessPoint.disconnect();
         this.isConnected = false;
-        console.log('Disconnected from free@home system');
+        console.log("Disconnected from free@home system");
       } catch (error) {
-        console.error('Error disconnecting from free@home:', error);
+        console.error("Error disconnecting from free@home:", error);
       }
     }
   }

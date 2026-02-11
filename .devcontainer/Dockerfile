@@ -6,6 +6,7 @@ ENV TZ="$TZ"
 # Install basic development tools and iptables/ipset
 RUN apt update && apt install -y less \
   git \
+  tig \
   procps \
   sudo \
   fzf \
@@ -67,7 +68,8 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -x
 
 # Install Claude
-RUN npm install -g @anthropic-ai/claude-code
+RUN curl -fsSL https://claude.ai/install.sh | bash
+RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 
 # Copy and set up firewall script
 COPY init-firewall.sh /usr/local/bin/

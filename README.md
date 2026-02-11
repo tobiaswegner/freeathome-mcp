@@ -1,10 +1,11 @@
 # free@home MCP Server
 
-A TypeScript-based MCP (Model Context Protocol) server that provides AI agents with access to Busch-Jaeger free@home smart home system data and control capabilities.
+A TypeScript-based MCP (Model Context Protocol) server that provides AI agents with access to ABB/Busch-Jaeger free@home smart home system data and control capabilities.
 
 ## Features
 
-- Connect to free@home system via the official `@busch-jaeger/free-at-home` package
+- Connect to the free@home System Access Point via the [`freeathome-api`](https://github.com/henry-spanka/freeathome-api) package (XMPP/WebSocket)
+- Real-time device state updates from the SysAP
 - Expose free@home functionality through MCP tools for AI agents
 - Get device information and status
 - Control devices and set datapoints
@@ -28,17 +29,19 @@ A TypeScript-based MCP (Model Context Protocol) server that provides AI agents w
 
 Set the following environment variables:
 
-- `FREEHOME_HOST`: IP address or hostname of your free@home system (default: localhost)
-- `FREEHOME_USERNAME`: Username for authentication (default: installer)
-- `FREEHOME_PASSWORD`: Password for authentication (required)
+- `FREEATHOME_HOSTNAME`: IP address or hostname of your free@home System Access Point (required)
+- `FREEATHOME_USERNAME`: Username configured on the SysAP (default: `admin`)
+- `FREEATHOME_PASSWORD`: Password for authentication (required)
 
 Example:
 
 ```bash
-export FREEHOME_HOST=192.168.1.100
-export FREEHOME_USERNAME=installer
-export FREEHOME_PASSWORD=your-password
+export FREEATHOME_HOSTNAME=192.168.1.100
+export FREEATHOME_USERNAME=Installer
+export FREEATHOME_PASSWORD=your-password
 ```
+
+**Note:** The user must be created on the System Access Point's web interface. The library communicates over XMPP/WebSocket and requires SysAP firmware >= 2.3.1.
 
 ## Usage
 
@@ -48,7 +51,7 @@ export FREEHOME_PASSWORD=your-password
 npm start
 ```
 
-The server will start and listen for MCP connections via stdio.
+The server will connect to the SysAP, wait for the initial device data, then start listening for MCP connections on HTTP (default port 3000).
 
 ### Development Mode
 
@@ -66,7 +69,7 @@ Get all devices from the free@home system.
 
 **Parameters:** None
 
-**Returns:** JSON object containing all devices
+**Returns:** JSON array of all devices with their channels, including display names, rooms, and floors.
 
 ### `get_device_info`
 
@@ -74,9 +77,9 @@ Get detailed information about a specific device.
 
 **Parameters:**
 
-- `deviceId` (string): The ID of the device
+- `deviceId` (string): The serial number of the device
 
-**Returns:** JSON object with device details
+**Returns:** JSON object with device details and channel metadata.
 
 ### `set_device_state`
 
@@ -84,12 +87,12 @@ Control a device by setting its state.
 
 **Parameters:**
 
-- `deviceId` (string): The ID of the device
-- `channelId` (string): The channel ID of the device
-- `datapoint` (string): The datapoint to set (e.g., "idp0000" for executing a command)
-- `value` (string): The value to set
+- `deviceId` (string): The serial number of the device
+- `channelId` (string): The channel ID (e.g., `ch0000`)
+- `datapoint` (string): The datapoint to set (e.g., `idp0000`)
+- `value` (string): The value to set (e.g., `1` for on, `0` for off)
 
-**Important:** Use input datapoints (idp) to send commands to devices. Output datapoints (odp) represent the current state and are read-only.
+**Important:** Use input datapoints (`idp`) to send commands to devices. Output datapoints (`odp`) represent the current state and are read-only.
 
 **Returns:** Success status
 
@@ -99,10 +102,10 @@ Get all datapoints for a specific device and channel.
 
 **Parameters:**
 
-- `deviceId` (string): The ID of the device
-- `channelId` (string): The channel ID
+- `deviceId` (string): The serial number of the device
+- `channelId` (string): The channel ID (e.g., `ch0000`)
 
-**Returns:** JSON object with input and output datapoints
+**Returns:** JSON object with `inputs` (idp) and `outputs` (odp) datapoints and their current values.
 
 ## Integration with AI Agents
 
@@ -125,8 +128,8 @@ This MCP server can be integrated with AI agents that support the Model Context 
 
 ### Project Structure
 
-- `src/index.ts` - Main MCP server implementation
-- `src/freehome-service.ts` - free@home connection and API wrapper
+- `src/index.ts` - Main MCP server implementation with HTTP transport
+- `src/freehome-service.ts` - free@home connection and API wrapper using `freeathome-api`
 - `dist/` - Compiled JavaScript output
 - `package.json` - Project configuration and dependencies
 
@@ -134,7 +137,7 @@ This MCP server can be integrated with AI agents that support the Model Context 
 
 - Node.js >= 18.0.0
 - TypeScript 5.0+
-- Access to a Busch-Jaeger free@home system
+- ABB/Busch-Jaeger free@home System Access Point with firmware >= 2.3.1
 
 ## License
 

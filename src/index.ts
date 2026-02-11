@@ -24,7 +24,7 @@ const server = new Server(
   }
 );
 
-const freeAtHomeService = new FreeAtHomeService();
+let freeAtHomeService: FreeAtHomeService;
 
 const tools: Tool[] = [
   {
@@ -188,6 +188,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 async function main(): Promise<void> {
   const port = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+
+  freeAtHomeService = new FreeAtHomeService();
+  await freeAtHomeService.connect();
+
   const app = express();
   
   app.use(express.json());
